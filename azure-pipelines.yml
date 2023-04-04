@@ -1,0 +1,122 @@
+trigger:
+  - main
+  - release/latest
+  
+pool:
+  name: FirstFilter
+  vmImage: ubuntu-latest
+
+variables:
+  - group: frontend-prd
+  - name: tag
+    value: '$(Build.BuildNumber)'
+  - name: registry
+    value: 'azfjprdacrcommone2'
+  - name: namespace
+    value: 'fj-frontend'
+  
+stages:
+- stage: Artifact
+  displayName: 'Artifact'
+  jobs:
+    - job: saludo
+      displayName: 'Saludo'  
+      script:
+        - |
+          echo 'Hola mundo.'
+          echo 'Hola mundo.'
+          echo 'Hola mundo.'
+          echo 'Hola mundo.'
+          echo 'Hola mundo.'
+          echo 'Hola mundo.'
+          echo 'Hola mundo.'
+          echo 'Hola mundo.'
+          echo 'Hola mundo.'
+          echo 'Hola mundo.'
+    - job: artifact
+      displayName: 'Artifact: ubuntu'
+      pool:
+        vmImage: ubuntu-latest
+      steps:
+        - task: CopyFiles@2
+          inputs:
+            Contents: '**'
+            targetFolder: '$(Build.ArtifactStagingDirectory)'    
+          displayName: 'Artifact: Copy'
+        - task: PublishBuildArtifacts@1
+          inputs:
+            PathtoPublish: '$(Build.ArtifactStagingDirectory)'
+            ArtifactName: 'drop'
+            publishLocation: 'Container'
+          displayName: 'Artifact: Publish'
+        
+- stage: Package
+  displayName: Package
+  jobs:
+  - job: package
+    displayName: package
+    pool:
+      vmImage: ubuntu-latest
+    steps:
+    - task: NodeTool@0
+      inputs:
+        versionSpec: '16.x'
+      displayName: 'Environment: Install Node.js'
+
+    - script: |
+        npm install
+        npm install -g @angular/cli@14
+        npm ci
+        npm ng build
+      displayName: 'Artifact: Test/Build'
+      env: 
+        API_URL: $(API_URL)
+
+    - task: ContainerBuild@0
+      inputs:
+        dockerRegistryServiceConnection: $(registry)
+        repository: $(Build.Repository.Name)
+        Dockerfile: 'Dockerfile'
+        tags: |
+          $(tag)
+          latest
+
+- stage: Deploy
+  displayName: Deploy to cluster
+  jobs:
+    - job: deploy
+      displayName: Deploy
+      pool:
+        vmImage: ubuntu-latest
+      steps:
+        - task: HelmDeploy@0
+          displayName: helm package
+          inputs:
+            connectionType: 'Azure Resource Manager'
+            azureSubscription: 'az-fj-prd-sc-common-e2'
+            azureResourceGroup: 'az-fj-prd-rg-common-e2'
+            kubernetesCluster: 'az-fj-prd-aks-common-e2'
+            namespace: $(namespace)
+            releaseName: $(Build.Repository.Name)
+            command: 'upgrade'
+            chartType: 'FilePath'
+            chartPath: './deploy'
+            waitForExecution: false
+            arguments: >
+              --debug
+              --set application_name=frontend
+              --set enviroment_name=prd
+              --set container_port=80
+              --set image=$(registry).azurecr.io/$(Build.Repository.Name):latest
+              --set namespace_name=$(namespace)
+              --namespace $(namespace)
+              --create-namespace
+        - task: Kubernetes@1
+          inputs:
+            connectionType: 'Kubernetes Service Connection'
+            kubernetesServiceEndpoint: 'az-fj-prd-svc-aks-common-e2'
+            namespace: 'fj-frontend'
+            command: rollout
+            arguments: restart deployment frontend-prd
+            secretType: 'dockerRegistry'
+            containerRegistryType: 'Azure Container Registry'
